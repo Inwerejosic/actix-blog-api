@@ -1,0 +1,19 @@
+[package]
+name = "blog_api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+actix-web = "4"
+actix-session = { version = "0.11", features = ["redis-session"] }
+sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "postgres", "chrono", "uuid"] }
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+anyhow = "1"
+thiserror = "1"
+dotenv = "0.15"
+env_logger = "0.10"
+bcrypt = "0.15"
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "time"] }
+hex = "0.4"               # to decode SECRET_KEY from hex
