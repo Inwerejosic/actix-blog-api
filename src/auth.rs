@@ -27,13 +27,13 @@ pub async fn login(
     .await?;
 
     let user = user.ok_or(ApiError::Unauthorized)?;
-    let stored_hash = user.password.as_deref().ok_or(ApiError::Unauthorized)?;
+    let stored_hash = &user.password;
 
     if !verify_password(&creds.password, stored_hash)? {
         return Err(ApiError::Unauthorized);
     }
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now();
     sqlx::query("UPDATE users SET last_login = $1 WHERE id = $2")
         .bind(now)
         .bind(user.id)

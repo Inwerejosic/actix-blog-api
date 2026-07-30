@@ -57,7 +57,7 @@ pub async fn get_user(pool: DbPool, path: web::Path<i32>) -> Result<HttpResponse
 
 pub async fn create_user(pool: DbPool, payload: web::Json<CreateUser>) -> Result<HttpResponse, ApiError> {
     let hashed = hash_password(&payload.password)?;
-    let now = Utc::now().naive_utc();
+    let now = Utc::now();
     let user: User = sqlx::query_as::<_, User>(
         "INSERT INTO users (username, password, email, last_login) VALUES ($1, $2, $3, $4) RETURNING id, username, password, email, last_login"
     )
@@ -71,11 +71,17 @@ pub async fn create_user(pool: DbPool, payload: web::Json<CreateUser>) -> Result
 }
 
 pub async fn update_user(
+    session: Session,
     pool: DbPool,
     path: web::Path<i32>,
     payload: web::Json<UpdateUser>,
 ) -> Result<HttpResponse, ApiError> {
+    let session_user_id = auth::get_session_user_id(&session)?;
     let id = path.into_inner();
+    if session_user_id != id {
+        return Err(ApiError::Unauthorized);
+    }
+
     let current: Option<User> = sqlx::query_as::<_, User>(
         "SELECT id, username, password, email, last_login FROM users WHERE id = $1"
     )
@@ -84,13 +90,13 @@ pub async fn update_user(
     .await?;
     let current = current.ok_or(ApiError::NotFound)?;
 
-    let new_username = payload.username.clone().unwrap_or_else(|| current.username.clone().unwrap_or_default());
+    let new_username = payload.username.clone().unwrap_or(current.username);
     let new_password = if let Some(pw) = &payload.password {
         hash_password(pw)?
     } else {
-        current.password.clone().unwrap_or_default()
+        current.password
     };
-    let new_email = payload.email.clone().unwrap_or_else(|| current.email.clone().unwrap_or_default());
+    let new_email = payload.email.clone().unwrap_or(current.email);
 
     let updated: User = sqlx::query_as::<_, User>(
         "UPDATE users SET username = $1, password = $2, email = $3 WHERE id = $4 RETURNING id, username, password, email, last_login"
@@ -104,8 +110,17 @@ pub async fn update_user(
     Ok(HttpResponse::Ok().json(UserResponse::from(updated)))
 }
 
-pub async fn delete_user(pool: DbPool, path: web::Path<i32>) -> Result<HttpResponse, ApiError> {
+pub async fn delete_user(
+    session: Session,
+    pool: DbPool,
+    path: web::Path<i32>,
+) -> Result<HttpResponse, ApiError> {
+    let session_user_id = auth::get_session_user_id(&session)?;
     let id = path.into_inner();
+    if session_user_id != id {
+        return Err(ApiError::Unauthorized);
+    }
+
     let rows = sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(id)
         .execute(pool.get_ref())
@@ -128,7 +143,16 @@ pub async fn list_posts(pool: DbPool) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(posts))
 }
 
-pub async fn create_post(pool: DbPool, payload: web::Json<CreatePost>) -> Result<HttpResponse, ApiError> {
+pub async fn create_post(
+    session: Session,
+    pool: DbPool,
+    payload: web::Json<CreatePost>,
+) -> Result<HttpResponse, ApiError> {
+    let session_user_id = auth::get_session_user_id(&session)?;
+    if session_user_id != payload.user_id {
+        return Err(ApiError::Unauthorized);
+    }
+
     let post: BlogPost = sqlx::query_as::<_, BlogPost>(
         "INSERT INTO blog_posts (user_id, title, content, cover) VALUES ($1, $2, $3, $4) RETURNING id, user_id, title, content, cover"
     )
@@ -173,9 +197,15 @@ pub async fn list_tags(pool: DbPool) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(tags))
 }
 
-pub async fn create_tag(pool: DbPool, payload: web::Json<CreateTag>) -> Result<HttpResponse, ApiError> {
+pub async fn create_tag(
+    session: Session,
+    pool: DbPool,
+    payload: web::Json<CreateTag>,
+) -> Result<HttpResponse, ApiError> {
+    let _session_user_id = auth::get_session_user_id(&session)?;
+
     let tag: Tag = sqlx::query_as::<_, Tag>(
-        "INSERT INTO tags (name) VALUES ($1) ON CONFLICT (name) DO NOTHING RETURNING id, name"
+        "INSERT INTO tags (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id, name"
     )
     .bind(&payload.name)
     .fetch_one(pool.get_ref())
@@ -183,22 +213,41 @@ pub async fn create_tag(pool: DbPool, payload: web::Json<CreateTag>) -> Result<H
     Ok(HttpResponse::Created().json(tag))
 }
 
-pub async fn add_tag_to_post(pool: DbPool, path: web::Path<(i32, i32)>) -> Result<HttpResponse, ApiError> {
+pub async fn add_tag_to_post(
+    session: Session,
+    pool: DbPool,
+    path: web::Path<(i32, i32)>,
+) -> Result<HttpResponse, ApiError> {
+    let session_user_id = auth::get_session_user_id(&session)?;
     let (post_id, tag_id) = path.into_inner();
 
-    let post_exists: Option<BlogPost> = sqlx::query_as::<_, BlogPost>("SELECT id FROM blog_posts WHERE id = $1")
-        .bind(post_id)
-        .fetch_optional(pool.get_ref())
-        .await?;
-    if post_exists.is_none() {
-        return Err(ApiError::NotFound);
+    // Check if post exists and get its author
+    let post_author: Option<(Option<i32>,)> = sqlx::query_as(
+        "SELECT user_id FROM blog_posts WHERE id = $1"
+    )
+    .bind(post_id)
+    .fetch_optional(pool.get_ref())
+    .await?;
+
+    match post_author {
+        Some((Some(author_id),)) => {
+            if author_id != session_user_id {
+                return Err(ApiError::Unauthorized);
+            }
+        }
+        Some((None,)) => {
+            return Err(ApiError::Unauthorized);
+        }
+        None => return Err(ApiError::NotFound),
     }
 
-    let tag_exists: Option<Tag> = sqlx::query_as::<_, Tag>("SELECT id FROM tags WHERE id = $1")
+    // Check if tag exists
+    let tag_exists = sqlx::query("SELECT 1 FROM tags WHERE id = $1")
         .bind(tag_id)
         .fetch_optional(pool.get_ref())
-        .await?;
-    if tag_exists.is_none() {
+        .await?
+        .is_some();
+    if !tag_exists {
         return Err(ApiError::NotFound);
     }
 
@@ -211,8 +260,34 @@ pub async fn add_tag_to_post(pool: DbPool, path: web::Path<(i32, i32)>) -> Resul
     Ok(HttpResponse::Created().finish())
 }
 
-pub async fn remove_tag_from_post(pool: DbPool, path: web::Path<(i32, i32)>) -> Result<HttpResponse, ApiError> {
+pub async fn remove_tag_from_post(
+    session: Session,
+    pool: DbPool,
+    path: web::Path<(i32, i32)>,
+) -> Result<HttpResponse, ApiError> {
+    let session_user_id = auth::get_session_user_id(&session)?;
     let (post_id, tag_id) = path.into_inner();
+
+    // Check if post exists and get its author
+    let post_author: Option<(Option<i32>,)> = sqlx::query_as(
+        "SELECT user_id FROM blog_posts WHERE id = $1"
+    )
+    .bind(post_id)
+    .fetch_optional(pool.get_ref())
+    .await?;
+
+    match post_author {
+        Some((Some(author_id),)) => {
+            if author_id != session_user_id {
+                return Err(ApiError::Unauthorized);
+            }
+        }
+        Some((None,)) => {
+            return Err(ApiError::Unauthorized);
+        }
+        None => return Err(ApiError::NotFound),
+    }
+
     let rows = sqlx::query("DELETE FROM blog_tag WHERE blog_id = $1 AND tag_id = $2")
         .bind(post_id)
         .bind(tag_id)

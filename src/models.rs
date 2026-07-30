@@ -1,4 +1,4 @@
-use chrono::NaiveDateTime;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
@@ -6,10 +6,10 @@ use sqlx::FromRow;
 #[derive(Debug, Serialize, FromRow, Clone)]
 pub struct User {
     pub id: i32,
-    pub username: Option<String>,
-    pub password: Option<String>,
-    pub email: Option<String>,
-    pub last_login: Option<NaiveDateTime>,
+    pub username: String,
+    pub password: String,
+    pub email: String,
+    pub last_login: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -24,16 +24,16 @@ pub struct BlogPost {
 #[derive(Debug, Serialize, FromRow)]
 pub struct Tag {
     pub id: i32,
-    pub name: Option<String>,
+    pub name: String,
 }
 
 // ---------- Response DTOs (without password) ----------
 #[derive(Debug, Serialize)]
 pub struct UserResponse {
     pub id: i32,
-    pub username: Option<String>,
-    pub email: Option<String>,
-    pub last_login: Option<NaiveDateTime>,
+    pub username: String,
+    pub email: String,
+    pub last_login: Option<DateTime<Utc>>,
 }
 
 impl From<User> for UserResponse {
