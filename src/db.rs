@@ -4,8 +4,7 @@ pub async fn create_pool() -> Result<PgPool, sqlx::Error> {
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     PgPoolOptions::new()
         .max_connections(20)
-        .connect(&database_url)
-        .await
+        .connect_lazy(&database_url)
 }
 
 pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {

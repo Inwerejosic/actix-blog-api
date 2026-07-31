@@ -73,7 +73,7 @@ async fn main() -> std::io::Result<()> {
             .service(web::resource("/tags").route(web::get().to(handlers::list_tags)).route(web::post().to(handlers::create_tag)))
             .service(web::resource("/posts/{post_id}/tags/{tag_id}").route(web::post().to(handlers::add_tag_to_post)).route(web::delete().to(handlers::remove_tag_from_post)))
     })
-    .bind(("127.0.0.1", 8080))?
+    .bind(("0.0.0.0", 8080))?
     .run()
     .await
 }
